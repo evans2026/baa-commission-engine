@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: baa_postgres
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - baa_pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: baa_app
+    hostname: baa-app
+    restart: unless-stopped
+    env_file: .env
+    # Run as your host user so files written to mounted volumes belong to you
+    user: "1000:1000"
+    volumes:
+      # Mount the whole project in so edits on your machine reflect immediately
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    # Stays alive so you can exec into it and run scripts
+    command: tail -f /dev/null
+
+volumes:
+  baa_pgdata:
+    driver: local
