@@ -1,30 +1,11 @@
-TASK: Upgrade to interview-ready PoC
+TASK: Fix floor guard test isolation
 STATUS: COMPLETE
 VERIFY OUTPUT:
-69 tests passed in 1.25s
-
-COMPLETED ITEMS:
-
-[✓] Schema-code alignment - all tables and columns present
-
-[✓] Added audit metadata to commission_ledger (ibnr_stale_days, ulr_divergence_flag, scheme_type_used)
-
-[✓] ULR divergence tests with proper assertions
-
-[✓] Band-crossing regression test added
-
-[✓] allow_negative_commission flag implemented (default: False - no negative deltas)
-
-[✓] Four temporal axes documented in run_trueup docstring
-
-[✓] CLI wrapper with commands:
-    - trueup: Run commission true-up
-    - ledger: Show ledger entries
-    - ibnr: Show IBNR snapshots
-    - schemes: Show profit commission schemes
+69 passed in 1.43s
 
 NOTES:
-- commission_rate now correctly shows effective rate
-- CarrierSplitsError properly raised for split failures
-- All 69 tests passing
-- CLI fully functional
+- Fixed test_floor_guard_in_severe_loss to properly restore seed data after test
+- Test now clears UY 2022 data, runs isolated test, then restores seed data
+- All tests now pass regardless of execution order
+
+NEXT TASK: None - work complete

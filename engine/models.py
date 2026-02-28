@@ -227,10 +227,16 @@ def write_commission_record(conn, record: Dict[str, Any]) -> None:
     """
     Write a commission calculation record to the ledger.
     
+    All fields including audit metadata:
+    - carrier_split_effective_from: vintage of carrier split used
+    - carrier_split_pct: participation percentage at that vintage
+    - ibnr_stale_days: days since IBNR snapshot was created
+    - ulr_divergence_flag: whether carrier vs MGU ULR diverged >10%
+    - scheme_type_used: which commission scheme was applied
+    
     Args:
         conn: Database connection
-        record: Dict containing all commission fields including
-                carrier_split_effective_from and carrier_split_pct
+        record: Dict containing all commission fields
     """
     with conn.cursor() as cur:
         cur.execute("""
@@ -239,13 +245,15 @@ def write_commission_record(conn, record: Dict[str, Any]) -> None:
                 as_of_date, earned_premium, paid_claims, ibnr_amount,
                 ultimate_loss_ratio, commission_rate, gross_commission,
                 prior_paid_total, delta_payment, floor_guard_applied, calc_type,
-                carrier_split_effective_from, carrier_split_pct
+                carrier_split_effective_from, carrier_split_pct,
+                ibnr_stale_days, ulr_divergence_flag, scheme_type_used
             ) VALUES (
                 %(underwriting_year)s, %(carrier_id)s, %(development_month)s,
                 %(as_of_date)s, %(earned_premium)s, %(paid_claims)s, %(ibnr_amount)s,
                 %(ultimate_loss_ratio)s, %(commission_rate)s, %(gross_commission)s,
                 %(prior_paid_total)s, %(delta_payment)s, %(floor_guard_applied)s,
-                %(calc_type)s, %(carrier_split_effective_from)s, %(carrier_split_pct)s
+                %(calc_type)s, %(carrier_split_effective_from)s, %(carrier_split_pct)s,
+                %(ibnr_stale_days)s, %(ulr_divergence_flag)s, %(scheme_type_used)s
             )
         """, record)
     conn.commit()

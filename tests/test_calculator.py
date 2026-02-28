@@ -180,32 +180,67 @@ class TestFloorGuard:
         conn = get_connection()
         try:
             cur = conn.cursor()
+            
+            # Clear existing UY 2022 transactions to isolate test
+            cur.execute("DELETE FROM transactions WHERE underwriting_year = 2022")
+            cur.execute("DELETE FROM policies WHERE underwriting_year = 2022")
+            conn.commit()
+            
+            # Insert isolated severe loss scenario
             cur.execute("""
                 INSERT INTO policies (policy_ref, underwriting_year, effective_date, expiry_date, gross_premium)
                 VALUES ('POL-LOSS-001', 2022, '2022-01-01', '2022-12-31', 100000.00)
-                ON CONFLICT DO NOTHING
             """)
             conn.commit()
 
             cur.execute("""
                 INSERT INTO transactions (policy_ref, underwriting_year, txn_type, txn_date, amount)
-                VALUES ('POL-LOSS-001', 2022, 'claim_paid', '2022-06-01', 5000000.00)
-                ON CONFLICT DO NOTHING
+                VALUES ('POL-LOSS-001', 2022, 'premium', '2022-01-01', 100000.00),
+                       ('POL-LOSS-001', 2022, 'claim_paid', '2022-06-01', 5000000.00)
             """)
             conn.commit()
 
             result = run_trueup(2022, 12, '2023-01-01', write_to_db=False)
             
-            # With massive claims, sliding scale commission should be 0%
-            # but floor guard should apply to guarantee minimum
+            # With massive claims (5000% loss ratio), sliding scale commission should be 0%
+            # but floor guard should apply to guarantee minimum 5%
             assert result.floor_guard_applied == True
             # Check that carriers got minimum commission despite 0% rate
             for alloc in result.carrier_allocations:
                 assert alloc['commission_rate'] == 0.0
                 assert alloc['delta_payment'] > 0  # Floor guard gave them something
 
+            # Restore seed data for UY 2022
             cur.execute("DELETE FROM transactions WHERE policy_ref = 'POL-LOSS-001'")
             cur.execute("DELETE FROM policies WHERE policy_ref = 'POL-LOSS-001'")
+            
+            # Re-insert seed policies for UY 2022
+            import random
+            from datetime import date, timedelta
+            random.seed(42)
+            for i in range(1, 11):
+                ref = f'POL-2022-{i:03d}'
+                eff = date(2022, random.randint(1,11), 1)
+                exp = date(2023, eff.month, 1)
+                premium = round(random.uniform(80_000, 600_000), 2)
+                cur.execute(
+                    '''INSERT INTO policies (policy_ref,underwriting_year,effective_date,expiry_date,gross_premium) 
+                       VALUES (%s, 2022, %s, %s, %s)''',
+                    (ref, eff, exp, premium)
+                )
+                cur.execute(
+                    '''INSERT INTO transactions (policy_ref,underwriting_year,txn_type,txn_date,amount) 
+                       VALUES (%s, 2022, 'premium', %s, %s)''',
+                    (ref, eff, premium)
+                )
+                if random.random() < 0.40:
+                    claim_amt = round(premium * random.uniform(0.2, 0.9), 2)
+                    claim_date = eff + timedelta(days=random.randint(90, 900))
+                    cur.execute(
+                        '''INSERT INTO transactions (policy_ref,underwriting_year,txn_type,txn_date,amount) 
+                           VALUES (%s, 2022, 'claim_paid', %s, %s)''',
+                        (ref, claim_date, claim_amt)
+                    )
             conn.commit()
         finally:
             conn.close()
@@ -225,39 +260,138 @@ class TestFloorGuard:
 class TestULRDivergence:
     """Tests for carrier vs MGU ULR divergence warning."""
 
-    def test_ulr_divergence_warning(self):
+    def test_ulr_divergence_warning_present(self):
         """Test that ULR divergence warning triggers when > 10%."""
-        result = run_trueup(2023, 24, '2025-01-01', write_to_db=False)
-        # Should have or not have warning based on data
-        div_warning_present = any('ULR' in w and 'divergence' in w for w in result.warnings)
-        # This test passes if the calculation runs correctly
-        assert result.earned_premium > 0
-
-    def test_ulr_divergence_flag_in_result(self):
-        """Test that ULR divergence is correctly computed."""
-        # When carrier ULR and MGU ULR differ by > 10%, should have warning
         conn = get_connection()
         try:
             cur = conn.cursor()
-            # Create high divergence scenario
+            
+            # First setup: create UY cohort and premium for 2025
             cur.execute("""
-                INSERT INTO ibnr_snapshots (underwriting_year, as_of_date, ibnr_amount, source, development_month)
-                VALUES (2025, '2025-01-01', 500000, 'carrier_official', 12)
+                INSERT INTO uy_cohorts (underwriting_year, period_start, period_end, status)
+                VALUES (2025, '2025-01-01', '2025-12-31', 'open')
                 ON CONFLICT DO NOTHING
             """)
             cur.execute("""
-                INSERT INTO ibnr_snapshots (underwriting_year, as_of_date, ibnr_amount, source, development_month)
-                VALUES (2025, '2025-01-01', 100000, 'mgu_internal', 12)
+                INSERT INTO policies (policy_ref, underwriting_year, effective_date, expiry_date, gross_premium)
+                VALUES ('POL-2025-001', 2025, '2025-01-01', '2025-12-31', 500000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO transactions (policy_ref, underwriting_year, txn_type, txn_date, amount)
+                VALUES ('POL-2025-001', 2025, 'premium', '2025-01-01', 500000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            # Create carrier splits
+            cur.execute("""
+                INSERT INTO carrier_splits (underwriting_year, carrier_id, carrier_name, participation_pct, effective_from)
+                VALUES (2025, 'CAR_A', 'Atlas Specialty', 0.70, '2025-01-01'),
+                       (2025, 'CAR_C', 'Crown Markets', 0.30, '2025-01-01')
+                ON CONFLICT DO NOTHING
+            """)
+            # Create high divergence IBNR
+            cur.execute("""
+                INSERT INTO ibnr_snapshots 
+                    (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2025, '2026-01-01', 2000000, 'carrier_official', 12)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO ibnr_snapshots 
+                    (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2025, '2026-01-01', 10000, 'mgu_internal', 12)
                 ON CONFLICT DO NOTHING
             """)
             conn.commit()
             
-            # Just verify it doesn't error
-            result = run_trueup(2023, 24, '2025-01-01', write_to_db=False)
-            assert result is not None
+            result = run_trueup(2025, 12, '2026-01-01', write_to_db=True)
+            
+            # Assert warning is present
+            div_warning = any('ULR' in w and 'divergence' in w for w in result.warnings)
+            assert div_warning, f"Expected divergence warning in warnings: {result.warnings}"
+            
+            # Assert ulr_divergence_flag is True in ledger
+            cur.execute("""
+                SELECT ulr_divergence_flag FROM commission_ledger 
+                WHERE underwriting_year = 2025 AND carrier_id = 'CAR_A'
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            assert row is not None, "Ledger entry not found"
+            assert row['ulr_divergence_flag'] == True, "Expected ulr_divergence_flag = True"
             
             # Cleanup
+            cur.execute("DELETE FROM commission_ledger WHERE underwriting_year = 2025")
             cur.execute("DELETE FROM ibnr_snapshots WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM transactions WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM policies WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM carrier_splits WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM uy_cohorts WHERE underwriting_year = 2025")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_ulr_divergence_warning_string(self):
+        """Test that divergence warning contains both 'ULR' and 'divergence'."""
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            
+            # Setup UY 2026 with data
+            cur.execute("""
+                INSERT INTO uy_cohorts (underwriting_year, period_start, period_end, status)
+                VALUES (2026, '2026-01-01', '2026-12-31', 'open')
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO policies (policy_ref, underwriting_year, effective_date, expiry_date, gross_premium)
+                VALUES ('POL-2026-001', 2026, '2026-01-01', '2026-12-31', 500000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO transactions (policy_ref, underwriting_year, txn_type, txn_date, amount)
+                VALUES ('POL-2026-001', 2026, 'premium', '2026-01-01', 500000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO carrier_splits (underwriting_year, carrier_id, carrier_name, participation_pct, effective_from)
+                VALUES (2026, 'CAR_A', 'Atlas Specialty', 0.70, '2026-01-01'),
+                       (2026, 'CAR_C', 'Crown Markets', 0.30, '2026-01-01')
+                ON CONFLICT DO NOTHING
+            """)
+            # Create high divergence IBNR
+            cur.execute("""
+                INSERT INTO ibnr_snapshots 
+                    (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2026, '2027-01-01', 1500000, 'carrier_official', 12)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO ibnr_snapshots 
+                    (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2026, '2027-01-01', 5000, 'mgu_internal', 12)
+                ON CONFLICT DO NOTHING
+            """)
+            conn.commit()
+            
+            result = run_trueup(2026, 12, '2027-01-01', write_to_db=True)
+            
+            # Assert warning string contains both "ULR" and "divergence"
+            div_warning_found = False
+            for w in result.warnings:
+                if 'ULR' in w.upper() and 'divergence' in w.lower():
+                    div_warning_found = True
+                    break
+            
+            assert div_warning_found, f"Expected warning containing 'ULR' and 'divergence': {result.warnings}"
+            
+            # Cleanup
+            cur.execute("DELETE FROM commission_ledger WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM ibnr_snapshots WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM transactions WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM policies WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM carrier_splits WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM uy_cohorts WHERE underwriting_year = 2026")
             conn.commit()
         finally:
             conn.close()
@@ -352,6 +486,9 @@ class TestLedgerWrite:
                 'calc_type': 'true_up',
                 'carrier_split_effective_from': '2024-01-01',
                 'carrier_split_pct': 0.70,
+                'ibnr_stale_days': 0,
+                'ulr_divergence_flag': False,
+                'scheme_type_used': 'sliding_scale',
             })
 
             cur.execute("""
