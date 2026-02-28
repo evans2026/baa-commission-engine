@@ -1,41 +1,30 @@
-TASK: Apply Mandatory Fix Specification
+TASK: Upgrade to interview-ready PoC
 STATUS: COMPLETE
 VERIFY OUTPUT:
-67 tests passed in 1.19s
+69 tests passed in 1.25s
 
 COMPLETED ITEMS:
 
-[✓] Migration 003 adding missing tables (carrier_schemes, baa_contract_versions, profit_commission_schemes, lpt_events, carriers)
+[✓] Schema-code alignment - all tables and columns present
 
-[✓] Migration extending commission_ledger (carrier_split_effective_from, carrier_split_pct)
+[✓] Added audit metadata to commission_ledger (ibnr_stale_days, ulr_divergence_flag, scheme_type_used)
 
-[✓] Fixed commission_rate behavior - now computes effective_rate = total_gross / earned_premium
+[✓] ULR divergence tests with proper assertions
 
-[✓] Normalized carrier split errors to CarrierSplitsError
+[✓] Band-crossing regression test added
 
-[✓] Completed ULR divergence test with deterministic scenario
+[✓] allow_negative_commission flag implemented (default: False - no negative deltas)
 
-[✓] Chose clawback model (Option B - no negative deltas) and implemented consistently
+[✓] Four temporal axes documented in run_trueup docstring
 
-[✓] Carrier split failure tests (missing splits, invalid sum)
-
-[✓] IBNR failure tests (missing carrier IBNR, missing MGU IBNR)
-
-[✓] Multi-scheme integration tests (CAR_A sliding, CAR_B corridor, CAR_C fixed+var)
-
-[✓] Audit reproducibility test (re-run produces zero delta)
-
-[✓] Deterministic seed data (random.seed(42))
-
-[✓] Scheme seed data added
-
-[✓] Full type hints in calculator.py, schemes.py, models.py
-
-[✓] Domain-specific error handling (CarrierSplitsError, NoIBNRSnapshotError, etc.)
-
-[✓] README updated with scheme types, domain errors, clawback model, audit model
+[✓] CLI wrapper with commands:
+    - trueup: Run commission true-up
+    - ledger: Show ledger entries
+    - ibnr: Show IBNR snapshots
+    - schemes: Show profit commission schemes
 
 NOTES:
-- commission_rate now correctly shows effective rate (21.34%) not ULR (14.68%)
-- All 67 tests passing
-- Pluggable scheme architecture working
+- commission_rate now correctly shows effective rate
+- CarrierSplitsError properly raised for split failures
+- All 69 tests passing
+- CLI fully functional

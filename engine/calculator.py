@@ -98,11 +98,18 @@ def check_lpt_freeze(conn, carrier_id: str, underwriting_year: int, as_of_date: 
 
 
 def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
-               calc_type: str = 'true_up', write_to_db: bool = True) -> TrueUpResult:
+               calc_type: str = 'true_up', write_to_db: bool = True,
+               allow_negative_commission: bool = False) -> TrueUpResult:
     """
     Run a commission true-up calculation for a given underwriting year and as-of date.
     
     Uses pluggable scheme architecture - each carrier can have different scheme.
+    
+    Four temporal axes:
+    - underwriting_year: The UY cohort (when policy was bound)
+    - txn_date: When the transaction occurred
+    - as_of_date: The evaluation date for the true-up
+    - system_timestamp: When the record was written
     
     Args:
         underwriting_year: The underwriting year (e.g., 2023)
@@ -110,6 +117,7 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
         as_of_date: Evaluation date (YYYY-MM-DD)
         calc_type: Type of calculation ('provisional', 'true_up', 'final')
         write_to_db: Whether to write results to commission_ledger
+        allow_negative_commission: Whether to allow negative commission deltas (default: False)
     
     Returns:
         TrueUpResult with all calculation details
@@ -192,6 +200,9 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
             scheme_type, scheme_params = get_carrier_scheme(conn, underwriting_year, cid, as_of_date)
             scheme_type_used = scheme_type
             
+            # Override allow_negative from scheme params if explicitly set
+            scheme_allow_negative = scheme_params.get('allow_negative_commission', allow_negative_commission)
+            
             # Create scheme instance
             try:
                 scheme = create_scheme(scheme_type)
@@ -210,6 +221,7 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
                 underwriting_year=underwriting_year,
                 as_of_date=as_of_date,
                 development_month=actual_dev_month,
+                allow_negative_commission=scheme_allow_negative,
             )
 
             # Compute commission using scheme
@@ -237,6 +249,9 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
             })
 
             if write_to_db:
+                # Determine staleness and divergence flags
+                ulr_div = abs(ulr - mgu_ulr) > ULR_DIVERGENCE_THRESHOLD
+                
                 write_commission_record(conn, {
                     'underwriting_year': underwriting_year,
                     'carrier_id': cid,
@@ -254,6 +269,9 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
                     'calc_type': calc_type,
                     'carrier_split_effective_from': carrier.get('effective_from'),
                     'carrier_split_pct': pct,
+                    'ibnr_stale_days': days_stale if days_stale > 0 else 0,
+                    'ulr_divergence_flag': ulr_div,
+                    'scheme_type_used': scheme_type,
                 })
 
         # Compute effective commission rate (total gross / earned premium)

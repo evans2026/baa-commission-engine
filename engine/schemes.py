@@ -62,6 +62,7 @@ class CommissionContext:
     underwriting_year: int
     as_of_date: str
     development_month: int
+    allow_negative_commission: bool = False
 
 
 @dataclass
@@ -136,7 +137,13 @@ class SlidingScaleScheme(ProfitCommissionScheme):
         floor_guard_applied = False
         
         delta = carrier_gross - context.prior_paid
-        if context.prior_paid + delta < minimum_commission:
+        
+        # Handle negative commission based on allow_negative_commission flag
+        if not context.allow_negative_commission and delta < 0:
+            delta = 0
+        
+        # Apply floor guard if not allowing negatives or if still below minimum
+        if not context.allow_negative_commission and context.prior_paid + delta < minimum_commission:
             delta = minimum_commission - context.prior_paid
             floor_guard_applied = True
         
