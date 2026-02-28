@@ -211,3 +211,51 @@ automated solution — and that I can build it.
 | Data generation | Faker + custom seed scripts |
 
 100% free and open source.
+
+---
+
+## Supported Scheme Types
+
+The engine supports multiple profit commission scheme types via a pluggable architecture:
+
+### 1. Sliding Scale
+Traditional tiered commission based on loss ratio bands.
+
+### 2. Fixed + Variable
+Base commission plus profit share above a threshold.
+
+### 3. Corridor
+Commission rate changes inside/outside a loss ratio corridor.
+
+### 4. Capped Scale
+Sliding scale with maximum commission cap.
+
+---
+
+## Domain Errors
+
+All errors are domain-specific for precise error handling:
+
+- `ProfitCommissionError` - Base exception
+- `CarrierSplitsError` - Missing or invalid carrier splits
+- `NoIBNRSnapshotError` - Missing IBNR data
+- `NoEarnedPremiumError` - No earned premium available
+- `UnknownSchemeTypeError` - Unrecognized scheme type
+
+---
+
+## Clawback Model
+
+**Option B (No Negative Deltas)** is implemented:
+- Negative commission deltas are not permitted
+- Delta is clamped to max(delta, 0) before floor guard
+- Floor guard guarantees minimum commission (5% of earned premium)
+
+---
+
+## Audit Model
+
+- **As-of semantics**: All calculations filter data by as_of_date
+- **System timestamp**: All records include system_timestamp for audit
+- **Vintage selection**: Carrier splits use effective_from to select correct historical split
+- **Reproducibility**: Re-running same true-up with same inputs produces zero delta

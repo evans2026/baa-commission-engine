@@ -256,6 +256,9 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
                     'carrier_split_pct': pct,
                 })
 
+        # Compute effective commission rate (total gross / earned premium)
+        effective_rate = total_gross / earned_premium if earned_premium > 0 else 0.0
+
         return TrueUpResult(
             underwriting_year=underwriting_year,
             development_month=actual_dev_month,
@@ -265,7 +268,7 @@ def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
             ibnr_carrier=ibnr_carrier,
             ibnr_mgu=ibnr_mgu,
             ultimate_loss_ratio=ulr,
-            commission_rate=ulr,  # Not directly meaningful with multiple schemes
+            commission_rate=effective_rate,
             gross_commission=total_gross,
             carrier_allocations=carrier_allocations,
             warnings=warnings,

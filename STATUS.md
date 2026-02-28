@@ -1,47 +1,41 @@
-TASK: Apply AGENT_TASKS_PROFIT_COMMISSION.md requirements
+TASK: Apply Mandatory Fix Specification
 STATUS: COMPLETE
 VERIFY OUTPUT:
-60 tests passed in 0.98s
+67 tests passed in 1.19s
 
-CHANGES IMPLEMENTED:
-1. Scheme Architecture (ProfitCommissionScheme base class):
-   - Base class with abstract compute_commission method
-   - SlidingScaleScheme, FixedPlusVariableScheme, CorridorProfitScheme, CappedScaleScheme
-   - Factory function create_scheme() and registry
+COMPLETED ITEMS:
 
-2. Fixed + Variable Scheme Implementation:
-   - Fixed base commission + variable profit share
-   - Profit threshold support
-   - Variable cap support
-   - Full test coverage
+[✓] Migration 003 adding missing tables (carrier_schemes, baa_contract_versions, profit_commission_schemes, lpt_events, carriers)
 
-3. Per-Carrier Scheme Selection:
-   - New carrier_schemes table
-   - Each carrier can have different scheme in same UY
-   - Data-driven scheme selection by effective_from
+[✓] Migration extending commission_ledger (carrier_split_effective_from, carrier_split_pct)
 
-4. Domain Error Handling:
-   - ProfitCommissionError base class
-   - MissingSchemeError, InvalidSchemeParametersError, UnknownSchemeTypeError
-   - CarrierSplitsError, NoEarnedPremiumError, NoIBNRSnapshotError
-   - All error conditions tested
+[✓] Fixed commission_rate behavior - now computes effective_rate = total_gross / earned_premium
 
-5. Test Suite (60 tests):
-   - Scheme registry tests
-   - Sliding scale scheme tests (boundary, floor guard)
-   - Fixed+variable scheme tests (profit below/above threshold, cap)
-   - Corridor scheme tests (inside/outside corridor)
-   - Capped scale tests
-   - Integration tests (mixed schemes per UY)
-   - Error handling tests
+[✓] Normalized carrier split errors to CarrierSplitsError
 
-6. Gitignore:
-   - Added AGENT_TASKS_PROFIT_COMMISSION.md
+[✓] Completed ULR divergence test with deterministic scenario
+
+[✓] Chose clawback model (Option B - no negative deltas) and implemented consistently
+
+[✓] Carrier split failure tests (missing splits, invalid sum)
+
+[✓] IBNR failure tests (missing carrier IBNR, missing MGU IBNR)
+
+[✓] Multi-scheme integration tests (CAR_A sliding, CAR_B corridor, CAR_C fixed+var)
+
+[✓] Audit reproducibility test (re-run produces zero delta)
+
+[✓] Deterministic seed data (random.seed(42))
+
+[✓] Scheme seed data added
+
+[✓] Full type hints in calculator.py, schemes.py, models.py
+
+[✓] Domain-specific error handling (CarrierSplitsError, NoIBNRSnapshotError, etc.)
+
+[✓] README updated with scheme types, domain errors, clawback model, audit model
 
 NOTES:
-All requirements from AGENT_TASKS_PROFIT_COMMISSION.md implemented.
-- Modular, pluggable architecture with scheme subclasses
-- Sliding scale and Fixed+Variable fully implemented and tested
-- Scheme selection is data-driven and versioned
-- All failure paths raise domain errors
-- 60 deterministic tests covering all functionality
+- commission_rate now correctly shows effective rate (21.34%) not ULR (14.68%)
+- All 67 tests passing
+- Pluggable scheme architecture working

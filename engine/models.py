@@ -10,6 +10,11 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+try:
+    from engine.schemes import CarrierSplitsError
+except ImportError:
+    CarrierSplitsError = ValueError
+
 load_dotenv('/app/.env')
 
 
@@ -189,11 +194,11 @@ def get_carrier_splits(conn, underwriting_year: int,
             """, (underwriting_year,))
         rows = cur.fetchall()
         if not rows:
-            raise ValueError(f'No carrier splits found for UY={underwriting_year} as_of={as_of_date}')
+            raise CarrierSplitsError(f'No carrier splits found for UY={underwriting_year} as_of={as_of_date}')
         splits = [dict(r) for r in rows]
         total_pct = sum(float(s['participation_pct']) for s in splits)
         if abs(total_pct - 1.0) > 0.0001:
-            raise ValueError(f'Carrier splits for UY={underwriting_year} as_of={as_of_date} sum to {total_pct}, expected 1.0')
+            raise CarrierSplitsError(f'Carrier splits for UY={underwriting_year} as_of={as_of_date} sum to {total_pct}, expected 1.0')
         return splits
 
 
