@@ -51,15 +51,16 @@ def run_trueup(underwriting_year, development_month, as_of_date,
     eval_date = date.fromisoformat(as_of_date)
     conn = get_connection()
     try:
-        earned_premium = get_earned_premium(conn, underwriting_year)
+        earned_premium = get_earned_premium(conn, underwriting_year, as_of_date)
         if earned_premium == 0:
             raise ValueError(f'No earned premium for UY {underwriting_year}')
 
         paid_claims = get_paid_claims(conn, underwriting_year, as_of_date)
-        carrier_snap = get_ibnr(conn, underwriting_year, development_month, 'carrier_official')
-        mgu_snap = get_ibnr(conn, underwriting_year, development_month, 'mgu_internal')
+        carrier_snap = get_ibnr(conn, underwriting_year, development_month, 'carrier_official', as_of_date)
+        mgu_snap = get_ibnr(conn, underwriting_year, development_month, 'mgu_internal', as_of_date)
         ibnr_carrier = float(carrier_snap['ibnr_amount'])
         ibnr_mgu = float(mgu_snap['ibnr_amount'])
+        actual_dev_month = carrier_snap['development_month']
 
         asof = date.fromisoformat(str(carrier_snap['as_of_date']))
         days_stale = (eval_date - asof).days
@@ -75,7 +76,7 @@ def run_trueup(underwriting_year, development_month, as_of_date,
         gross_commission = earned_premium * commission_rate
         minimum_commission = earned_premium * MIN_COMMISSION_RATE
 
-        carrier_splits = get_carrier_splits(conn, underwriting_year)
+        carrier_splits = get_carrier_splits(conn, underwriting_year, as_of_date)
         if not carrier_splits:
             raise ValueError(f'No carrier splits for UY {underwriting_year}')
 
@@ -108,7 +109,7 @@ def run_trueup(underwriting_year, development_month, as_of_date,
                 write_commission_record(conn, {
                     'underwriting_year': underwriting_year,
                     'carrier_id': cid,
-                    'development_month': development_month,
+                    'development_month': actual_dev_month,
                     'as_of_date': as_of_date,
                     'earned_premium': round(earned_premium * pct, 2),
                     'paid_claims': round(paid_claims * pct, 2),
@@ -120,11 +121,13 @@ def run_trueup(underwriting_year, development_month, as_of_date,
                     'delta_payment': round(delta, 2),
                     'floor_guard_applied': floor_guard_applied,
                     'calc_type': calc_type,
+                    'carrier_split_effective_from': carrier.get('effective_from'),
+                    'carrier_split_pct': pct,
                 })
 
         return TrueUpResult(
             underwriting_year=underwriting_year,
-            development_month=development_month,
+            development_month=actual_dev_month,
             as_of_date=as_of_date,
             earned_premium=earned_premium,
             paid_claims=paid_claims,
