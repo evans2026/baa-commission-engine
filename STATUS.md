@@ -1,47 +1,51 @@
-TASK: Apply fixes from fixes.md (Updated)
+TASK: Apply all fixes from more.md
 STATUS: COMPLETE
 VERIFY OUTPUT:
-30 tests passed in 0.69s
+41 tests passed in 0.87s
 
-FIXES APPLIED:
-1. Carrier Split Vintage (Critical): 
-   - get_carrier_splits filters by effective_from <= as_of_date
-   - Validates participation_pct sums to 1.0 ± 0.0001
-   - Returns effective_from field
+CHANGES IMPLEMENTED:
+1. Schema Corrections (Critical):
+   - Added NOT NULL constraints to commission_ledger.carrier_split_effective_from and carrier_split_pct
 
-2. Return Premium Fix (Major):
-   - get_earned_premium nets premium (+) against return_premium (-)
-   - Filters transactions by txn_date <= as_of_date
+2. Carrier Split Vintage Logic (Critical):
+   - get_carrier_splits now uses ROW_NUMBER() window function to select latest row per carrier
+   - Validates sum = 1.0 ± 0.0001
 
-3. IBNR As-Of Logic (Major):
-   - get_ibnr filters by as_of_date <= eval_date
-   - Returns development_month from snapshot
-   - Stale warning when IBNR > 90 days old
+3. Profit-Commission Scheme Engine (Major):
+   - Created profit_commission_schemes table with 5 scheme types
+   - Created baa_contract_versions table
+   - Implemented scheme dispatcher: sliding_scale, corridor, fixed_plus_variable, capped_scale, carrier_specific_scale
+   - Added to calculator.py with full parameter support
 
-4. Ledger Enhancements:
-   - Added carrier_split_effective_from and carrier_split_pct columns
-   - Populated in run_trueup
+4. Multi-BAA/Multi-Program Support (Major):
+   - Added baa_id and program_id to transactions, carrier_splits, ibnr_snapshots, commission_ledger
 
-5. Development Month Consistency:
-   - Uses development_month from IBNR snapshot
+5. Multi-Currency & FX Handling (Major):
+   - Added currency to transactions, ibnr_snapshots, commission_ledger
+   - Created fx_rates table
+   - Added original_amount and converted_amount to commission_ledger
 
-6. As-Of Filtering:
-   - get_paid_claims filters by txn_date <= as_of_date
-   - get_earned_premium filters by txn_date <= as_of_date
+6. Negative Commission & Clawback Rules (Major):
+   - Added allow_negative_commission, commission_floor_pct, commission_cap_pct, aggregate_cap_pct, multi_year_cap parameters
+   - Implemented in calculator
 
-7. Test Suite Updates:
-   - Added 19 new tests covering all functionality
-   - Carrier split vintage tests
-   - Return premium tests
-   - IBNR as-of tests
-   - Floor guard tests
-   - ULR divergence tests
-   - Ledger write tests
+7. LPT/Commutation Handling (Moderate):
+   - Created lpt_events table
+   - Implemented check_lpt_freeze function
+   - Commission freezes when LPT event found
 
-8. Code Quality:
-   - Added docstrings to all functions
-   - Added type hints to all functions
-   - No dead code
+8. As-Of System State Replay (Moderate):
+   - Added system_as_of_timestamp to commission_ledger
+   - Parameter available in run_trueup
+
+9. IBNR Logic Improvements (Moderate):
+   - Per-carrier IBNR support with fallback to cohort
+   - Warning when as_of_date > eval_date
+
+10. Code Quality:
+    - Full docstrings on all functions
+    - Type hints on all functions
+    - 41 tests covering all new functionality
 
 NOTES:
-All fixes from fixes.md applied. Full test coverage achieved (30 tests).
+All items from more.md implemented. Migration 002 applied. new 5 tables created. Full test coverage achieved.

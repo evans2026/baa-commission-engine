@@ -147,8 +147,9 @@ def get_carrier_splits(conn, underwriting_year: int,
     """
     Get carrier splits for a given underwriting year as of a specific date.
     
-    Filters by effective_from <= as_of_date to select the appropriate vintage.
-    Validates that participation percentages sum to 1.0 ± 0.0001.
+    Uses window functions to select the latest row per carrier where 
+    effective_from <= as_of_date. Validates that participation percentages 
+    sum to 1.0 ± 0.0001.
     
     Args:
         conn: Database connection
@@ -165,16 +166,26 @@ def get_carrier_splits(conn, underwriting_year: int,
         if as_of_date:
             cur.execute("""
                 SELECT carrier_id, carrier_name, participation_pct, effective_from, system_timestamp
-                FROM carrier_splits
-                WHERE underwriting_year = %s AND effective_from <= %s
-                ORDER BY effective_from DESC, system_timestamp DESC
+                FROM (
+                    SELECT carrier_id, carrier_name, participation_pct, effective_from, system_timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY carrier_id ORDER BY effective_from DESC, system_timestamp DESC) as rn
+                    FROM carrier_splits
+                    WHERE underwriting_year = %s AND effective_from <= %s
+                ) ranked
+                WHERE rn = 1
+                ORDER BY carrier_id
             """, (underwriting_year, as_of_date))
         else:
             cur.execute("""
                 SELECT carrier_id, carrier_name, participation_pct, effective_from, system_timestamp
-                FROM carrier_splits
-                WHERE underwriting_year = %s
-                ORDER BY effective_from DESC, system_timestamp DESC
+                FROM (
+                    SELECT carrier_id, carrier_name, participation_pct, effective_from, system_timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY carrier_id ORDER BY effective_from DESC, system_timestamp DESC) as rn
+                    FROM carrier_splits
+                    WHERE underwriting_year = %s
+                ) ranked
+                WHERE rn = 1
+                ORDER BY carrier_id
             """, (underwriting_year,))
         rows = cur.fetchall()
         if not rows:

@@ -2,7 +2,11 @@ import pytest
 from datetime import date, timedelta
 from engine.calculator import (
     get_commission_rate, MIN_COMMISSION_RATE, SLIDING_SCALE,
-    run_trueup, IBNR_STALENESS_DAYS, ULR_DIVERGENCE_THRESHOLD
+    run_trueup, IBNR_STALENESS_DAYS, ULR_DIVERGENCE_THRESHOLD,
+    get_scheme_rate, get_corridor_rate, get_fixed_plus_variable_rate,
+    get_capped_scale_rate, get_carrier_specific_rate,
+    SCHEME_SLIDING_SCALE, SCHEME_CORRIDOR, SCHEME_FIXED_PLUS_VARIABLE,
+    SCHEME_CAPPED_SCALE, SCHEME_CARRIER_SPECIFIC
 )
 from engine.models import (
     get_connection, get_earned_premium, get_carrier_splits,
@@ -335,5 +339,124 @@ class TestLedgerWrite:
             # Cleanup
             cur.execute("DELETE FROM commission_ledger WHERE carrier_id = 'CAR_TEST'")
             conn.commit()
+        finally:
+            conn.close()
+
+
+class TestSchemeEngine:
+    """Tests for the profit commission scheme engine."""
+
+    def test_scheme_dispatch_sliding_scale(self):
+        rate = get_scheme_rate(SCHEME_SLIDING_SCALE, 0.40, None, {})
+        assert rate == 0.27
+
+    def test_scheme_dispatch_corridor(self):
+        params = {'corridor_min': 0.3, 'corridor_max': 0.6, 'rate_inside': 0.25, 'rate_outside': 0.0}
+        rate = get_scheme_rate(SCHEME_CORRIDOR, 0.45, None, params)
+        assert rate == 0.25
+
+    def test_scheme_dispatch_corridor_outside(self):
+        params = {'corridor_min': 0.3, 'corridor_max': 0.6, 'rate_inside': 0.25, 'rate_outside': 0.0}
+        rate = get_scheme_rate(SCHEME_CORRIDOR, 0.70, None, params)
+        assert rate == 0.0
+
+    def test_scheme_dispatch_fixed_plus_variable(self):
+        params = {'fixed_rate': 0.10, 'variable_rate': 0.15, 'loss_ratio_threshold': 0.60}
+        rate = get_scheme_rate(SCHEME_FIXED_PLUS_VARIABLE, 0.50, None, params)
+        assert rate == 0.25
+
+    def test_scheme_dispatch_fixed_plus_variable_above_threshold(self):
+        params = {'fixed_rate': 0.10, 'variable_rate': 0.15, 'loss_ratio_threshold': 0.60}
+        rate = get_scheme_rate(SCHEME_FIXED_PLUS_VARIABLE, 0.70, None, params)
+        assert rate == 0.10
+
+    def test_scheme_dispatch_capped_scale(self):
+        params = {'bands': [[0.45, 0.27], [0.55, 0.23], [1.0, 0.0]], 'max_commission_pct': 0.20}
+        rate = get_scheme_rate(SCHEME_CAPPED_SCALE, 0.40, None, params)
+        assert rate == 0.20  # Capped at 0.20
+
+    def test_scheme_dispatch_carrier_specific(self):
+        params = {'scales': {'CAR_A': [[0.45, 0.28], [1.0, 0.0]]}}
+        rate = get_scheme_rate(SCHEME_CARRIER_SPECIFIC, 0.40, 'CAR_A', params)
+        assert rate == 0.28
+
+    def test_carrier_specific_different_carriers(self):
+        params = {'scales': {'CAR_A': [[0.45, 0.28], [1.0, 0.0]], 'CAR_B': [[0.45, 0.26], [1.0, 0.0]]}}
+        rate_a = get_scheme_rate(SCHEME_CARRIER_SPECIFIC, 0.40, 'CAR_A', params)
+        rate_b = get_scheme_rate(SCHEME_CARRIER_SPECIFIC, 0.40, 'CAR_B', params)
+        assert rate_a == 0.28
+        assert rate_b == 0.26
+        assert rate_a != rate_b
+
+
+class TestMultipleVintages:
+    """Tests for carrier split vintage selection."""
+
+    def test_multiple_vintages_selects_latest(self):
+        """Test that window function selects latest row per carrier."""
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            # This test verifies the window function logic by checking the function returns
+            # one row per carrier (latest vintage)
+            splits = get_carrier_splits(conn, 2024, '2025-01-01')
+            
+            # Should be exactly 2 carriers
+            assert len(splits) == 2
+            
+            # Each carrier should appear exactly once
+            carrier_ids = [s['carrier_id'] for s in splits]
+            assert len(set(carrier_ids)) == 2
+            assert 'CAR_A' in carrier_ids
+            assert 'CAR_C' in carrier_ids
+            
+        finally:
+            conn.close()
+
+
+class TestLPTFreeze:
+    """Tests for LPT (Loss Portfolio Transfer) freeze logic."""
+
+    def test_lpt_freeze_stops_commission(self):
+        """Test that LPT event freezes commission."""
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            # Add LPT event
+            cur.execute("""
+                INSERT INTO lpt_events (carrier_id, baa_id, program_id, underwriting_year, 
+                    effective_date, freeze_commission)
+                VALUES ('CAR_A', 'DEFAULT_BAA', 'DEFAULT_PROGRAM', 2023, '2024-01-01', TRUE)
+            """)
+            conn.commit()
+
+            # Run trueup - CAR_A should be frozen
+            result = run_trueup(2023, 24, '2025-01-01', write_to_db=False)
+            car_a_alloc = [a for a in result.carrier_allocations if a['carrier_id'] == 'CAR_A'][0]
+            assert car_a_alloc.get('frozen', False) == True
+            assert car_a_alloc['delta_payment'] == 0
+
+            # Cleanup
+            cur.execute("DELETE FROM lpt_events WHERE carrier_id = 'CAR_A' AND underwriting_year = 2023")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+class TestNegativeCommission:
+    """Tests for negative commission handling."""
+
+    def test_negative_commission_disallowed_by_default(self):
+        """Test that negative commission is disallowed by default."""
+        # This is handled in the calculator - by default allow_negative = False
+        # So delta will be set to 0 if negative
+        conn = get_connection()
+        try:
+            # The logic in calculator sets delta = 0 if not allow_negative and delta < 0
+            # This is tested via the warning message
+            result = run_trueup(2023, 24, '2025-01-01', write_to_db=False)
+            # Check no negative deltas in allocations
+            for alloc in result.carrier_allocations:
+                assert alloc['delta_payment'] >= 0
         finally:
             conn.close()
