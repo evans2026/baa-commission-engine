@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 *.log
 fixes.md
+AGENT_TASKS_PROFIT_COMMISSION.md

@@ -1,51 +1,47 @@
-TASK: Apply all fixes from more.md
+TASK: Apply AGENT_TASKS_PROFIT_COMMISSION.md requirements
 STATUS: COMPLETE
 VERIFY OUTPUT:
-41 tests passed in 0.87s
+60 tests passed in 0.98s
 
 CHANGES IMPLEMENTED:
-1. Schema Corrections (Critical):
-   - Added NOT NULL constraints to commission_ledger.carrier_split_effective_from and carrier_split_pct
+1. Scheme Architecture (ProfitCommissionScheme base class):
+   - Base class with abstract compute_commission method
+   - SlidingScaleScheme, FixedPlusVariableScheme, CorridorProfitScheme, CappedScaleScheme
+   - Factory function create_scheme() and registry
 
-2. Carrier Split Vintage Logic (Critical):
-   - get_carrier_splits now uses ROW_NUMBER() window function to select latest row per carrier
-   - Validates sum = 1.0 ± 0.0001
+2. Fixed + Variable Scheme Implementation:
+   - Fixed base commission + variable profit share
+   - Profit threshold support
+   - Variable cap support
+   - Full test coverage
 
-3. Profit-Commission Scheme Engine (Major):
-   - Created profit_commission_schemes table with 5 scheme types
-   - Created baa_contract_versions table
-   - Implemented scheme dispatcher: sliding_scale, corridor, fixed_plus_variable, capped_scale, carrier_specific_scale
-   - Added to calculator.py with full parameter support
+3. Per-Carrier Scheme Selection:
+   - New carrier_schemes table
+   - Each carrier can have different scheme in same UY
+   - Data-driven scheme selection by effective_from
 
-4. Multi-BAA/Multi-Program Support (Major):
-   - Added baa_id and program_id to transactions, carrier_splits, ibnr_snapshots, commission_ledger
+4. Domain Error Handling:
+   - ProfitCommissionError base class
+   - MissingSchemeError, InvalidSchemeParametersError, UnknownSchemeTypeError
+   - CarrierSplitsError, NoEarnedPremiumError, NoIBNRSnapshotError
+   - All error conditions tested
 
-5. Multi-Currency & FX Handling (Major):
-   - Added currency to transactions, ibnr_snapshots, commission_ledger
-   - Created fx_rates table
-   - Added original_amount and converted_amount to commission_ledger
+5. Test Suite (60 tests):
+   - Scheme registry tests
+   - Sliding scale scheme tests (boundary, floor guard)
+   - Fixed+variable scheme tests (profit below/above threshold, cap)
+   - Corridor scheme tests (inside/outside corridor)
+   - Capped scale tests
+   - Integration tests (mixed schemes per UY)
+   - Error handling tests
 
-6. Negative Commission & Clawback Rules (Major):
-   - Added allow_negative_commission, commission_floor_pct, commission_cap_pct, aggregate_cap_pct, multi_year_cap parameters
-   - Implemented in calculator
-
-7. LPT/Commutation Handling (Moderate):
-   - Created lpt_events table
-   - Implemented check_lpt_freeze function
-   - Commission freezes when LPT event found
-
-8. As-Of System State Replay (Moderate):
-   - Added system_as_of_timestamp to commission_ledger
-   - Parameter available in run_trueup
-
-9. IBNR Logic Improvements (Moderate):
-   - Per-carrier IBNR support with fallback to cohort
-   - Warning when as_of_date > eval_date
-
-10. Code Quality:
-    - Full docstrings on all functions
-    - Type hints on all functions
-    - 41 tests covering all new functionality
+6. Gitignore:
+   - Added AGENT_TASKS_PROFIT_COMMISSION.md
 
 NOTES:
-All items from more.md implemented. Migration 002 applied. new 5 tables created. Full test coverage achieved.
+All requirements from AGENT_TASKS_PROFIT_COMMISSION.md implemented.
+- Modular, pluggable architecture with scheme subclasses
+- Sliding scale and Fixed+Variable fully implemented and tested
+- Scheme selection is data-driven and versioned
+- All failure paths raise domain errors
+- 60 deterministic tests covering all functionality
