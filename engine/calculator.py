@@ -4,7 +4,7 @@ Sliding scale, floor guard, carrier split allocation, audit ledger write.
 """
 from datetime import date
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from engine.models import (
     get_connection, get_earned_premium, get_paid_claims,
     get_ibnr, get_carrier_splits, get_prior_commission_paid,
@@ -22,9 +22,12 @@ SLIDING_SCALE = [
 
 MIN_COMMISSION_RATE = 0.05
 IBNR_STALENESS_DAYS = 90
+ULR_DIVERGENCE_THRESHOLD = 0.10
+
 
 @dataclass
 class TrueUpResult:
+    """Result of a commission true-up calculation."""
     underwriting_year: int
     development_month: int
     as_of_date: str
@@ -35,19 +38,56 @@ class TrueUpResult:
     ultimate_loss_ratio: float
     commission_rate: float
     gross_commission: float
-    carrier_allocations: list = field(default_factory=list)
-    warnings: list = field(default_factory=list)
+    carrier_allocations: List[Dict[str, Any]] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
     floor_guard_applied: bool = False
 
-def get_commission_rate(loss_ratio):
+
+def get_commission_rate(loss_ratio: float) -> float:
+    """
+    Get commission rate from sliding scale based on ultimate loss ratio.
+    
+    Args:
+        loss_ratio: Ultimate loss ratio (claims + IBNR / earned premium)
+    
+    Returns:
+        Commission rate from the appropriate sliding scale band
+    """
     for lr_max, rate in SLIDING_SCALE:
         if loss_ratio < lr_max:
             return rate
     return 0.0
 
-def run_trueup(underwriting_year, development_month, as_of_date,
-               calc_type='true_up', write_to_db=True):
-    warnings = []
+
+def run_trueup(underwriting_year: int, development_month: int, as_of_date: str,
+               calc_type: str = 'true_up', write_to_db: bool = True) -> TrueUpResult:
+    """
+    Run a commission true-up calculation for a given underwriting year and as-of date.
+    
+    Uses as-of semantics for:
+    - Carrier splits (effective_from <= as_of_date)
+    - Earned premium (txn_date <= as_of_date)
+    - Paid claims (txn_date <= as_of_date)
+    - IBNR (as_of_date <= eval_date)
+    
+    Validates carrier split sum = 1.0 ± 0.0001.
+    Warns on stale IBNR and ULR divergence between carrier and MGU.
+    Applies floor guard for minimum commission guarantee.
+    
+    Args:
+        underwriting_year: The underwriting year (e.g., 2023)
+        development_month: Development month to query IBNR for (e.g., 12, 24, 36)
+        as_of_date: Evaluation date (YYYY-MM-DD)
+        calc_type: Type of calculation ('provisional', 'true_up', 'final')
+        write_to_db: Whether to write results to commission_ledger
+    
+    Returns:
+        TrueUpResult with all calculation details
+    
+    Raises:
+        ValueError: If no earned premium, no carrier splits, or validation fails
+    """
+    warnings: List[str] = []
     eval_date = date.fromisoformat(as_of_date)
     conn = get_connection()
     try:
@@ -69,7 +109,7 @@ def run_trueup(underwriting_year, development_month, as_of_date,
 
         ulr = (paid_claims + ibnr_carrier) / earned_premium
         mgu_ulr = (paid_claims + ibnr_mgu) / earned_premium
-        if abs(ulr - mgu_ulr) > 0.10:
+        if abs(ulr - mgu_ulr) > ULR_DIVERGENCE_THRESHOLD:
             warnings.append(f'WARNING: Carrier ULR {ulr:.2%} vs MGU ULR {mgu_ulr:.2%} — divergence exceeds 10%')
 
         commission_rate = get_commission_rate(ulr)
@@ -81,7 +121,7 @@ def run_trueup(underwriting_year, development_month, as_of_date,
             raise ValueError(f'No carrier splits for UY {underwriting_year}')
 
         floor_guard_applied = False
-        carrier_allocations = []
+        carrier_allocations: List[Dict[str, Any]] = []
 
         for carrier in carrier_splits:
             cid = carrier['carrier_id']

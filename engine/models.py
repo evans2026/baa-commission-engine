@@ -4,13 +4,17 @@ All queries use parameterised inputs.
 Connects to Postgres at hostname 'db' (the Docker service name).
 """
 import os
+from datetime import date
+from typing import Optional, List, Dict, Any
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
 load_dotenv('/app/.env')
 
+
 def get_connection():
+    """Get a database connection with RealDictCursor."""
     return psycopg2.connect(
         host='db',
         port=os.getenv('POSTGRES_PORT', 5432),
@@ -20,27 +24,65 @@ def get_connection():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-def get_earned_premium(conn, underwriting_year, as_of_date=None):
+
+def get_earned_premium(conn, underwriting_year: int, as_of_date: Optional[str] = None) -> float:
+    """
+    Calculate net earned premium for a given underwriting year.
+    
+    Nets premium (positive) against return_premium (negative).
+    Filters transactions by txn_date <= as_of_date if provided.
+    
+    Args:
+        conn: Database connection
+        underwriting_year: The underwriting year to calculate for
+        as_of_date: Optional cutoff date for transactions (YYYY-MM-DD)
+    
+    Returns:
+        Net earned premium (premium - return_premium)
+    """
     with conn.cursor() as cur:
-        date_filter = ""
-        params = [underwriting_year]
         if as_of_date:
-            date_filter = "AND txn_date <= %s"
-            params.append(as_of_date)
-        cur.execute(f"""
-            SELECT COALESCE(SUM(
-                CASE
-                    WHEN txn_type = 'premium' THEN amount
-                    WHEN txn_type = 'return_premium' THEN -amount
-                    ELSE 0
-                END
-            ), 0) as total
-            FROM transactions
-            WHERE underwriting_year = %s AND txn_type IN ('premium', 'return_premium') {date_filter}
-        """, params)
+            cur.execute("""
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN txn_type = 'premium' THEN amount
+                        WHEN txn_type = 'return_premium' THEN -amount
+                        ELSE 0
+                    END
+                ), 0) as total
+                FROM transactions
+                WHERE underwriting_year = %s 
+                  AND txn_type IN ('premium', 'return_premium')
+                  AND txn_date <= %s
+            """, (underwriting_year, as_of_date))
+        else:
+            cur.execute("""
+                SELECT COALESCE(SUM(
+                    CASE
+                        WHEN txn_type = 'premium' THEN amount
+                        WHEN txn_type = 'return_premium' THEN -amount
+                        ELSE 0
+                    END
+                ), 0) as total
+                FROM transactions
+                WHERE underwriting_year = %s 
+                  AND txn_type IN ('premium', 'return_premium')
+            """, (underwriting_year,))
         return float(cur.fetchone()['total'])
 
-def get_paid_claims(conn, underwriting_year, as_of_date):
+
+def get_paid_claims(conn, underwriting_year: int, as_of_date: str) -> float:
+    """
+    Get total paid claims for a given underwriting year as of a specific date.
+    
+    Args:
+        conn: Database connection
+        underwriting_year: The underwriting year
+        as_of_date: Cutoff date for claims (YYYY-MM-DD)
+    
+    Returns:
+        Total paid claims
+    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT COALESCE(SUM(amount), 0) as total
@@ -51,7 +93,29 @@ def get_paid_claims(conn, underwriting_year, as_of_date):
         """, (underwriting_year, as_of_date))
         return float(cur.fetchone()['total'])
 
-def get_ibnr(conn, underwriting_year, development_month, source='carrier_official', eval_date=None):
+
+def get_ibnr(conn, underwriting_year: int, development_month: int, 
+             source: str = 'carrier_official', 
+             eval_date: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Get IBNR snapshot for a given underwriting year and development month.
+    
+    Filters snapshots where as_of_date <= eval_date to ensure proper as-of semantics.
+    Orders by as_of_date DESC, system_timestamp DESC to get the latest valid snapshot.
+    
+    Args:
+        conn: Database connection
+        underwriting_year: The underwriting year
+        development_month: The development month (12, 24, 36, etc.)
+        source: 'carrier_official' or 'mgu_internal'
+        eval_date: Evaluation date to filter snapshots (YYYY-MM-DD)
+    
+    Returns:
+        Dict with ibnr_amount, as_of_date, development_month
+    
+    Raises:
+        ValueError: If no IBNR snapshot found
+    """
     with conn.cursor() as cur:
         if eval_date:
             cur.execute("""
@@ -77,7 +141,26 @@ def get_ibnr(conn, underwriting_year, development_month, source='carrier_officia
             raise ValueError(f'No IBNR found for UY={underwriting_year} dev={development_month} source={source} eval_date={eval_date}')
         return dict(row)
 
-def get_carrier_splits(conn, underwriting_year, as_of_date=None):
+
+def get_carrier_splits(conn, underwriting_year: int, 
+                      as_of_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Get carrier splits for a given underwriting year as of a specific date.
+    
+    Filters by effective_from <= as_of_date to select the appropriate vintage.
+    Validates that participation percentages sum to 1.0 ± 0.0001.
+    
+    Args:
+        conn: Database connection
+        underwriting_year: The underwriting year
+        as_of_date: Date to filter splits (YYYY-MM-DD)
+    
+    Returns:
+        List of carrier split dicts with all fields
+    
+    Raises:
+        ValueError: If no splits found or percentages don't sum to 1.0
+    """
     with conn.cursor() as cur:
         if as_of_date:
             cur.execute("""
@@ -98,11 +181,23 @@ def get_carrier_splits(conn, underwriting_year, as_of_date=None):
             raise ValueError(f'No carrier splits found for UY={underwriting_year} as_of={as_of_date}')
         splits = [dict(r) for r in rows]
         total_pct = sum(float(s['participation_pct']) for s in splits)
-        if abs(total_pct - 1.0) > 0.01:
-            raise ValueError(f'Carrier splits for UY={underwriting_year} as_of={as_of_date} sum to {total_pct}, expected ~1.0')
+        if abs(total_pct - 1.0) > 0.0001:
+            raise ValueError(f'Carrier splits for UY={underwriting_year} as_of={as_of_date} sum to {total_pct}, expected 1.0')
         return splits
 
-def get_prior_commission_paid(conn, underwriting_year, carrier_id):
+
+def get_prior_commission_paid(conn, underwriting_year: int, carrier_id: str) -> float:
+    """
+    Get total prior commission paid for a carrier in an underwriting year.
+    
+    Args:
+        conn: Database connection
+        underwriting_year: The underwriting year
+        carrier_id: The carrier identifier
+    
+    Returns:
+        Sum of delta_payment from commission_ledger
+    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT COALESCE(SUM(delta_payment), 0) as total
@@ -111,7 +206,16 @@ def get_prior_commission_paid(conn, underwriting_year, carrier_id):
         """, (underwriting_year, carrier_id))
         return float(cur.fetchone()['total'])
 
-def write_commission_record(conn, record):
+
+def write_commission_record(conn, record: Dict[str, Any]) -> None:
+    """
+    Write a commission calculation record to the ledger.
+    
+    Args:
+        conn: Database connection
+        record: Dict containing all commission fields including
+                carrier_split_effective_from and carrier_split_pct
+    """
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO commission_ledger (
