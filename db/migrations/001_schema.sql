@@ -85,11 +85,11 @@ CREATE TABLE IF NOT EXISTS commission_ledger (
     calc_type                VARCHAR(30) NOT NULL
                             CHECK (calc_type IN ('provisional', 'true_up', 'final')),
     -- Audit metadata for vintage tracking
-    carrier_split_effective_from DATE NOT NULL DEFAULT '2024-01-01',
-    carrier_split_pct        NUMERIC(5,4) NOT NULL DEFAULT 0.5,
+    carrier_split_effective_from DATE,
+    carrier_split_pct        NUMERIC(5,4),
     -- Additional audit flags
-    ibnr_stale_days         INTEGER NOT NULL DEFAULT 0,
-    ulr_divergence_flag      BOOLEAN NOT NULL DEFAULT FALSE,
+    ibnr_stale_days         INTEGER DEFAULT 0,
+    ulr_divergence_flag      BOOLEAN DEFAULT FALSE,
     scheme_type_used         VARCHAR(50),
     system_timestamp         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -98,20 +98,12 @@ CREATE TABLE IF NOT EXISTS commission_ledger (
 -- Additional tables for multi-scheme support
 -- ============================================================
 
--- Carriers table
-CREATE TABLE IF NOT EXISTS carriers (
-    id                  SERIAL PRIMARY KEY,
-    carrier_id          VARCHAR(50) NOT NULL UNIQUE,
-    carrier_name        VARCHAR(100) NOT NULL,
-    system_timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- Profit commission scheme definitions
 CREATE TABLE IF NOT EXISTS profit_commission_schemes (
     scheme_id            SERIAL PRIMARY KEY,
     name                 VARCHAR(100) NOT NULL,
     scheme_type          VARCHAR(50) NOT NULL,
-    params               JSONB DEFAULT '{}',
+    parameters_json      JSONB DEFAULT '{}'::jsonb,
     system_timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -120,10 +112,11 @@ CREATE TABLE IF NOT EXISTS carrier_schemes (
     id                       SERIAL PRIMARY KEY,
     underwriting_year        INTEGER NOT NULL REFERENCES uy_cohorts(underwriting_year),
     carrier_id               VARCHAR(50) NOT NULL,
-    scheme_code              VARCHAR(50) NOT NULL,
-    profit_commission_scheme_id INTEGER REFERENCES profit_commission_schemes(scheme_id),
+    effective_from          DATE NOT NULL,
+    scheme_type             VARCHAR(50) NOT NULL,
+    parameters_json         JSONB DEFAULT '{}'::jsonb,
     system_timestamp         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(underwriting_year, carrier_id, scheme_code)
+    UNIQUE(underwriting_year, carrier_id, effective_from)
 );
 
 -- BAA contract versions
@@ -134,6 +127,7 @@ CREATE TABLE IF NOT EXISTS baa_contract_versions (
     effective_from      DATE NOT NULL,
     effective_to        DATE,
     description         TEXT,
+    scheme_id           INTEGER REFERENCES profit_commission_schemes(scheme_id),
     system_timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(underwriting_year, version_number)
 );
@@ -143,9 +137,8 @@ CREATE TABLE IF NOT EXISTS lpt_events (
     id                  SERIAL PRIMARY KEY,
     underwriting_year   INTEGER NOT NULL REFERENCES uy_cohorts(underwriting_year),
     carrier_id          VARCHAR(50) NOT NULL,
-    event_date           DATE NOT NULL,
+    effective_date      DATE NOT NULL,
     freeze_commission   BOOLEAN NOT NULL DEFAULT TRUE,
-    notes               TEXT,
     system_timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -172,3 +165,5 @@ CREATE INDEX IF NOT EXISTS idx_lpt_events_uy
     ON lpt_events(underwriting_year, carrier_id);
 CREATE INDEX IF NOT EXISTS idx_fx_rates_date
     ON fx_rates(currency, rate_date);
+CREATE INDEX IF NOT EXISTS idx_carrier_schemes_lookup
+    ON carrier_schemes(underwriting_year, carrier_id, effective_from);

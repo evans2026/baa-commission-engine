@@ -552,9 +552,8 @@ class TestLPTFreeze:
         try:
             cur = conn.cursor()
             cur.execute("""
-                INSERT INTO lpt_events (carrier_id, baa_id, program_id, underwriting_year, 
-                    effective_date, freeze_commission)
-                VALUES ('CAR_A', 'DEFAULT_BAA', 'DEFAULT_PROGRAM', 2023, '2024-01-01', TRUE)
+                INSERT INTO lpt_events (underwriting_year, carrier_id, effective_date, freeze_commission)
+                VALUES (2023, 'CAR_A', '2024-01-01', TRUE)
             """)
             conn.commit()
 
@@ -564,6 +563,157 @@ class TestLPTFreeze:
             assert car_a_alloc['delta_payment'] == 0
 
             cur.execute("DELETE FROM lpt_events WHERE carrier_id = 'CAR_A' AND underwriting_year = 2023")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+class TestCarrierSchemeLookup:
+    """Tests for get_carrier_scheme function."""
+
+    def test_get_carrier_scheme_from_carrier_schemes_table(self):
+        """Test that carrier scheme is looked up from carrier_schemes table."""
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            
+            # Setup UY 2025 (not in seed data)
+            cur.execute("""
+                INSERT INTO uy_cohorts (underwriting_year, period_start, period_end, status)
+                VALUES (2025, '2025-01-01', '2025-12-31', 'open')
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO policies (policy_ref, underwriting_year, effective_date, expiry_date, gross_premium)
+                VALUES ('POL-TEST-001', 2025, '2025-01-01', '2025-12-31', 100000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO transactions (policy_ref, underwriting_year, txn_type, txn_date, amount)
+                VALUES ('POL-TEST-001', 2025, 'premium', '2025-01-01', 100000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO carrier_splits (underwriting_year, carrier_id, carrier_name, participation_pct, effective_from)
+                VALUES (2025, 'CAR_A', 'Atlas Specialty', 1.0, '2025-01-01')
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO ibnr_snapshots (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2025, '2026-01-01', 10000, 'carrier_official', 12),
+                       (2025, '2026-01-01', 10000, 'mgu_internal', 12)
+                ON CONFLICT DO NOTHING
+            """)
+            conn.commit()
+            
+            # Insert carrier_schemes entry
+            cur.execute("""
+                INSERT INTO carrier_schemes (underwriting_year, carrier_id, effective_from, scheme_type, parameters_json)
+                VALUES (2025, 'CAR_A', '2025-01-01', 'corridor_profit', 
+                    '{"floor": 0.03, "ceiling": 0.15, "corridor_min": 0.40, "corridor_max": 0.60}')
+            """)
+            
+            conn.commit()
+            
+            # Run trueup and check that scheme_type_used matches
+            result = run_trueup(2025, 12, '2026-01-01', write_to_db=True)
+            
+            # Check that the ledger has the correct scheme_type_used
+            cur.execute("""
+                SELECT scheme_type_used FROM commission_ledger 
+                WHERE underwriting_year = 2025 AND carrier_id = 'CAR_A'
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            assert row is not None, "No ledger entry found"
+            assert row['scheme_type_used'] == 'corridor_profit', f"Expected 'corridor_profit', got '{row['scheme_type_used']}'"
+            
+            # Cleanup
+            cur.execute("DELETE FROM carrier_schemes WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM commission_ledger WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM ibnr_snapshots WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM carrier_splits WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM transactions WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM policies WHERE underwriting_year = 2025")
+            cur.execute("DELETE FROM uy_cohorts WHERE underwriting_year = 2025")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_get_carrier_scheme_fallback_to_contract_version(self):
+        """Test fallback to baa_contract_versions when no carrier_schemes entry."""
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            
+            # Setup UY 2026 (not in seed data)
+            cur.execute("""
+                INSERT INTO uy_cohorts (underwriting_year, period_start, period_end, status)
+                VALUES (2026, '2026-01-01', '2026-12-31', 'open')
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO policies (policy_ref, underwriting_year, effective_date, expiry_date, gross_premium)
+                VALUES ('POL-TEST-002', 2026, '2026-01-01', '2026-12-31', 100000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO transactions (policy_ref, underwriting_year, txn_type, txn_date, amount)
+                VALUES ('POL-TEST-002', 2026, 'premium', '2026-01-01', 100000.00)
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO carrier_splits (underwriting_year, carrier_id, carrier_name, participation_pct, effective_from)
+                VALUES (2026, 'CAR_A', 'Atlas Specialty', 1.0, '2026-01-01')
+                ON CONFLICT DO NOTHING
+            """)
+            cur.execute("""
+                INSERT INTO ibnr_snapshots (underwriting_year, as_of_date, ibnr_amount, source, development_month)
+                VALUES (2026, '2027-01-01', 10000, 'carrier_official', 12),
+                       (2026, '2027-01-01', 10000, 'mgu_internal', 12)
+                ON CONFLICT DO NOTHING
+            """)
+            
+            # Insert a profit commission scheme definition
+            cur.execute("""
+                INSERT INTO profit_commission_schemes (name, scheme_type, parameters_json)
+                VALUES ('Corridor Profit Test', 'corridor_profit', 
+                    '{"floor": 0.03, "ceiling": 0.15, "corridor_min": 0.40, "corridor_max": 0.60}')
+                RETURNING scheme_id
+            """)
+            result = cur.fetchone()
+            scheme_id = result['scheme_id']
+            
+            # Insert baa_contract_versions entry with scheme_id (no carrier_schemes entry)
+            cur.execute("""
+                INSERT INTO baa_contract_versions (underwriting_year, version_number, effective_from, scheme_id)
+                VALUES (2026, 1, '2026-01-01', %s)
+            """, (scheme_id,))
+            
+            conn.commit()
+            
+            # Run trueup and check that scheme_type_used matches
+            result = run_trueup(2026, 12, '2027-01-01', write_to_db=True)
+            
+            # Check that the ledger has the correct scheme_type_used
+            cur.execute("""
+                SELECT scheme_type_used FROM commission_ledger 
+                WHERE underwriting_year = 2026
+                ORDER BY id DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+            assert row is not None, "No ledger entry found"
+            assert row['scheme_type_used'] == 'corridor_profit', f"Expected 'corridor_profit', got '{row['scheme_type_used']}'"
+            
+            # Cleanup
+            cur.execute("DELETE FROM baa_contract_versions WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM profit_commission_schemes WHERE scheme_id = %s", (scheme_id,))
+            cur.execute("DELETE FROM commission_ledger WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM ibnr_snapshots WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM carrier_splits WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM transactions WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM policies WHERE underwriting_year = 2026")
+            cur.execute("DELETE FROM uy_cohorts WHERE underwriting_year = 2026")
             conn.commit()
         finally:
             conn.close()

@@ -42,6 +42,26 @@ for uy, carriers in splits.items():
             (uy, cid, cname, pct, f'{uy}-01-01')
         )
 
+# Carrier-specific scheme assignments
+carrier_schemes = {
+    2023: [
+        ('CAR_A', 'sliding_scale', '{"min_commission_rate": 0.05}'),
+        ('CAR_B', 'fixed_plus_variable', '{"fixed_rate": 0.10, "variable_rate": 0.05, "profit_threshold": 0.50}'),
+        ('CAR_C', 'sliding_scale', '{"min_commission_rate": 0.05}'),
+    ],
+    2024: [
+        ('CAR_A', 'fixed_plus_variable', '{"fixed_rate": 0.08, "variable_rate": 0.07, "profit_threshold": 0.45}'),
+        ('CAR_C', 'fixed_plus_variable', '{"fixed_rate": 0.08, "variable_rate": 0.07, "profit_threshold": 0.45}'),
+    ],
+}
+for uy, schemes in carrier_schemes.items():
+    for cid, scheme_type, params in schemes:
+        cur.execute(
+            "INSERT INTO carrier_schemes (underwriting_year,carrier_id,effective_from,scheme_type,parameters_json) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            (uy, cid, f'{uy}-01-01', scheme_type, params)
+        )
+
 # Policies and transactions
 for uy in [2022, 2023, 2024]:
     for i in range(1, 11):
